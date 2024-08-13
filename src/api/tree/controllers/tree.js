@@ -105,16 +105,27 @@ module.exports = createCoreController("api::tree.tree", ({ strapi }) => ({
   async find(ctx) {
     const { page = 1, pageSize = 10 } = ctx.query; // Add pagination parameters
 
-    // Fetch only parent nodes initially
+    // Fetch parent nodes
     const result = await strapi.entityService.findPage("api::tree.tree", {
       filters: { parent: null },
       pagination: { page, pageSize },
       populate: '*',
     });
 
-    const data = result.results.map(node => ({
-      id: node.id,
-      attributes: node,
+    // Check if each node has children and add hasChild property
+    const data = await Promise.all(result.results.map(async node => {
+
+      const childCount = await strapi.entityService.count("api::tree.tree", {
+        filters: { parent: { id: node.id } }, // Correct structure for filtering by parent ID
+      });
+
+      return {
+        id: node.id,
+        attributes: {
+          ...node,
+          hasChild: childCount > 0,
+        },
+      };
     }));
 
     return { data, meta: result.pagination };
@@ -122,18 +133,33 @@ module.exports = createCoreController("api::tree.tree", ({ strapi }) => ({
 
   async findChildren(ctx) {
     const { parentId } = ctx.params;
+
+    // Fetch child nodes
     const entities = await strapi.entityService.findMany("api::tree.tree", {
       filters: { parent: parentId },
       populate: '*',
     });
 
-    return {
-      data: entities.map(entity => ({
+    // Add hasChild property to each node
+    const data = await Promise.all(entities.map(async entity => {
+      const childCount = await strapi.entityService.count("api::tree.tree", {
+        // filters: { parent: entity.id }, // Count children of the current entity
+        filters: { parent: { id: entity.id } }, // Correct structure for filtering by parent ID
+
+      });
+
+      return {
         id: entity.id,
-        attributes: entity,
-      })),
-    };
+        attributes: {
+          ...entity,
+          hasChild: childCount > 0, // Add hasChild property
+        },
+      };
+    }));
+
+    return { data };
   },
+
 
     async findfull(ctx) {
     const result = await super.find(ctx);
@@ -147,7 +173,7 @@ module.exports = createCoreController("api::tree.tree", ({ strapi }) => ({
 
       nodes.forEach((node) => {
         node.attributes.children = [];
-        node.attributes.hasChildren = false;
+        node.attributes.hasChild = false;
         nodeMap[node.id] = node;
       });
 
@@ -155,7 +181,7 @@ module.exports = createCoreController("api::tree.tree", ({ strapi }) => ({
         if (node.attributes.parent?.data?.id) {
           const parentId = node.attributes.parent.data.id;
           nodeMap[parentId].attributes.children.push(node);
-          nodeMap[parentId].attributes.hasChildren = true;
+          nodeMap[parentId].attributes.hasChild = true;
         } else {
           rootNodes.push(node);
         }
